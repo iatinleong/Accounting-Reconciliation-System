@@ -23,9 +23,16 @@ sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, 
 # 0. 設定
 # ══════════════════════════════════════════════════
 
-DATA_DIR     = r"C:\Users\user\Desktop\專案\會計對帳\資料"
-AR_PATH      = os.path.join(DATA_DIR, '未銷帳明細表_.xlsm')
-HISTORY_PATH = os.path.join(DATA_DIR, 'handler_history.json')
+_BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR     = os.path.join(_BASE_DIR, '資料')
+def _find_ar_path(data_dir: str) -> str:
+    for fname in os.listdir(data_dir):
+        if '未銷帳明細' in fname and fname.endswith('.xlsm') and not fname.startswith('~$'):
+            return os.path.join(data_dir, fname)
+    return os.path.join(data_dir, '未銷帳明細表_.xlsm')  # fallback
+
+AR_PATH      = _find_ar_path(DATA_DIR)
+HISTORY_PATH = os.path.join(_BASE_DIR, 'handler_history.json')
 OUTPUT_DIR   = DATA_DIR
 
 STAFF_TABLE = {
@@ -38,7 +45,8 @@ STAFF_TABLE = {
     'A25': '陳彥如', 'A26': '陳秋安', 'A27': '李宜蓁', 'A28': '陳淑瑜',
 }
 
-FUZZY_THRESHOLD = 0.45  # pure fuzzy 路徑的最低分
+FUZZY_THRESHOLD  = 0.45  # pure fuzzy 路徑的最低分
+EXACT_MIN_FUZZY  = 0.15  # same-handler shortcut 的最低相似度（低於此視為文字完全不相關）
 MIN_KEYWORD_LEN = 3    # 關鍵字至少需有幾個 CJK 字才算「命中」（2字如「富邦」太泛，不算）
 MIN_MATCH_CHARS = 2    # cjk_substrings 產生子字串的最短長度（內部用）
 
@@ -320,9 +328,10 @@ def keyword_hit(bank_remark: str, ar_desc: str) -> bool:
     return False
 
 def _search_table(table: pd.DataFrame, bank_remark: str, bank_amount: float,
-                  tol: float = None):
+                  tol: float = None, require_text: bool = False):
     """
-    金額篩選（tol=0 為精確，tol>0 為容差）+ 關鍵字命中（或 fuzzy fallback）→ 最佳一筆。
+    金額篩選 + 關鍵字命中（或 fuzzy fallback）→ 最佳一筆。
+    require_text=True：跳過 same-handler shortcut，強制關鍵字/fuzzy 確認（用於歷史資料庫）。
     回傳 row dict 或 None。
     """
     if table.empty or bank_amount <= 0:
@@ -332,14 +341,16 @@ def _search_table(table: pd.DataFrame, bank_remark: str, bank_amount: float,
     cands = table[abs(table['_amount'] - bank_amount) <= tol].copy()
     if cands.empty:
         return None
-    # 精確配對：1筆或多筆同一經辦 → handler 確定，取文字分最高那筆
-    if tol == 0:
+    # 精確配對且同一經辦 → 只限 1A（AR 即時表），1B 強制走文字確認
+    if tol == 0 and not require_text:
         valid = cands[cands['_handler'].apply(lambda h: bool(str(h).strip()))]
         if not valid.empty and valid['_handler'].nunique() == 1:
             valid = valid.copy()
             valid['_score'] = valid['_desc'].apply(lambda d: fuzzy_score(bank_remark, d))
             top = valid.sort_values('_score', ascending=False).iloc[0]
-            return top.to_dict()
+            if top['_score'] >= EXACT_MIN_FUZZY:
+                return top.to_dict()
+            # 文字完全不相關，不走 shortcut，繼續進關鍵字/fuzzy 正常路徑
     kw_mask = cands['_desc'].apply(lambda d: keyword_hit(bank_remark, d))
     hits    = cands.loc[kw_mask].copy()
     if hits.empty:
@@ -359,11 +370,11 @@ def _search_table(table: pd.DataFrame, bank_remark: str, bank_amount: float,
 def find_handler(bank_remark: str, bank_amount: float,
                  ar_table: pd.DataFrame, hist_df: pd.DataFrame) -> dict:
     """
-    兩段式查找：先對兩個來源做絕對金額配對，都找不到才改用容差：
+    四段式查找：
       精確 1A：未銷帳明細（金額完全吻合）
-      精確 1B：歷史資料庫（金額完全吻合）
-      緩衝 1A：未銷帳明細（金額±容差）
-      緩衝 1B：歷史資料庫（金額±容差）
+      緩衝 1A：未銷帳明細（金額±容差 + 文字比對）
+      精確 1B：歷史資料庫（金額完全吻合 + 關鍵字/fuzzy 確認）
+      緩衝 1B：歷史資料庫（金額±30% + 關鍵字/fuzzy 確認）
       均未找到 → 人工處理
     """
     remark = str(bank_remark or '').strip()
@@ -390,7 +401,7 @@ def find_handler(bank_remark: str, bank_amount: float,
             src_amount=src_amount,
         )
 
-    # ── 精確配對：金額完全吻合（tol=0）────────────
+    # ── 精確 1A：未銷帳明細，金額完全吻合 ────────────
     r = _search_table(ar_table, remark, amount, tol=0)
     if r:
         return make_result(
@@ -399,15 +410,7 @@ def find_handler(bank_remark: str, bank_amount: float,
             r['_desc'], r['_file'], r['_sheet'], r.get('_date', ''), r['_amount'],
         )
 
-    r = _search_table(hist_df, remark, amount, tol=0)
-    if r:
-        return make_result(
-            r['_handler'], r.get('_name', ''), '1B',
-            f'歷史資料庫比對（金額完全吻合，摘要相似度 {round(r.get("_score",0),2)}）',
-            r['_desc'], r['_file'], r['_sheet'], r.get('_date', ''), r['_amount'],
-        )
-
-    # ── 緩衝配對：找不到精確才用容差 ───────────────
+    # ── 緩衝 1A：未銷帳明細，金額±容差 ───────────────
     r = _search_table(ar_table, remark, amount, tol=tol)
     if r:
         return make_result(
@@ -416,11 +419,22 @@ def find_handler(bank_remark: str, bank_amount: float,
             r['_desc'], r['_file'], r['_sheet'], r.get('_date', ''), r['_amount'],
         )
 
-    r = _search_table(hist_df, remark, amount, tol=tol)
+    # ── 精確 1B：歷史資料庫，金額完全吻合（同一經辦即確定，不需文字）────
+    r = _search_table(hist_df, remark, amount, tol=0)
     if r:
         return make_result(
             r['_handler'], r.get('_name', ''), '1B',
-            f'歷史資料庫比對（金額±{tol:,}，相似度 {round(r.get("_score",0),2)}）',
+            f'歷史資料庫比對（金額完全吻合，摘要相似度 {round(r.get("_score",0),2)}）',
+            r['_desc'], r['_file'], r['_sheet'], r.get('_date', ''), r['_amount'],
+        )
+
+    # ── 緩衝 1B：歷史資料庫，金額±5% + 文字確認 ────────
+    tol_5pct = amount * 0.05
+    r = _search_table(hist_df, remark, amount, tol=tol_5pct, require_text=True)
+    if r:
+        return make_result(
+            r['_handler'], r.get('_name', ''), '1B',
+            f'歷史資料庫比對（金額±5%，摘要相似度 {round(r.get("_score",0),2)}）',
             r['_desc'], r['_file'], r['_sheet'], r.get('_date', ''), r['_amount'],
         )
 

@@ -4,6 +4,7 @@ import os
 import re
 import warnings
 import itertools
+import difflib
 from IPython.display import display, HTML
 import win32com.client as win32
 warnings.filterwarnings('ignore')
@@ -11,13 +12,13 @@ pd.set_option('display.float_format', lambda x: '%.2f' % x)
 pd.set_option('display.max_columns', None)
 
 import openai
-api_key = os.environ.get("OPENAI_API_KEY", "")
+api_key = ""
 client = openai.OpenAI(api_key=api_key)
 
 # ── 1. 掃描資料夾：支援多份銀行對帳單與多份帳務查詢 ──
 # 同一底名（不同副檔名）只取「最佳」版本：xlsx > xlsm > xls
 # 避免 convert_to_xlsx 轉出的 .xlsx 與原始檔重複載入。
-data_dir = r'C:\Users\user\Desktop\專案\會計對帳\資料'
+data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '資料')
 _EXT_PRIORITY = {'.xlsx': 0, '.xlsm': 1, '.xls': 2}
 
 # 先按底名分組，每組只保留優先度最高的副檔名
@@ -347,12 +348,26 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
         # 同金額的其他銀行筆（可能也在競爭同一筆會計）
         competing_banks = rem_b[(rem_b[bank_amt_col] == b_amt) & (rem_b.index != b_idx)]
         if len(candidates) == 1 and competing_banks.empty:
-            # 真正唯一（銀行唯一 + 會計唯一）
+            # 真正唯一（銀行唯一 + 會計唯一），但需語意確認才配對
             a_row = candidates.iloc[0]
-            history.append({'Type': f'{label} 1對1', 'MatchReason': '金額唯一',
-                            'Bank_Data': b_row.to_frame().T, 'Acc_Data': a_row.to_frame().T})
-            rem_a = rem_a.drop(candidates.index[0])
-            rem_b = rem_b.drop(b_idx)
+            km, kw = keyword_match(b_row.get('附言', ''), a_row.get('描述.1', ''))
+            if km:
+                print(f"  ✅ [1-B] Bank:{b_row['Bank_index']}({b_amt:,.0f}) ↔ Acc:{a_row['Acc_index']} 金額唯一+關鍵字「{kw}」")
+                history.append({'Type': f'{label} 1對1', 'MatchReason': f'金額唯一+關鍵字「{kw}」',
+                                'Bank_Data': b_row.to_frame().T, 'Acc_Data': a_row.to_frame().T})
+                rem_a = rem_a.drop(candidates.index[0])
+                rem_b = rem_b.drop(b_idx)
+            else:
+                # 無關鍵字 → LLM 確認，防止語意不相關的金額湊對
+                print(f"  ⚠️ [1-B] Bank:{b_row['Bank_index']}({b_amt:,.0f}) 金額唯一但無關鍵字 → LLM確認...")
+                is_v, rs = evaluate_combination_with_llm(b_row.to_frame().T, a_row.to_frame().T, "1對1", mode)
+                if is_v:
+                    history.append({'Type': f'{label} 1對1', 'MatchReason': f'金額唯一+LLM確認',
+                                    'Bank_Data': b_row.to_frame().T, 'Acc_Data': a_row.to_frame().T})
+                    rem_a = rem_a.drop(candidates.index[0])
+                    rem_b = rem_b.drop(b_idx)
+                else:
+                    print(f"  🚫 [1-B] Bank:{b_row['Bank_index']} LLM不確認，保留待後續步驟配對")
         elif len(candidates) == 1 and not competing_banks.empty:
             # 會計唯一但多筆銀行同金額競爭 → LLM 從銀行端選最吻合的
             a_row = candidates.iloc[0]
@@ -377,7 +392,7 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
                 rem_a = rem_a[rem_a['Acc_index'] != best_id]
                 rem_b = rem_b.drop(b_idx)
 
-    # Step 2: 1 Bank → 2 Acc
+    # Step 2: 1 Bank → 2 Acc（精確，優先於近似配對）
     print(f"\n⏳ [Step 2] 1 Bank → 2 Acc... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")
     matched_b, matched_a = [], []
     for (a1i, a1), (a2i, a2) in itertools.combinations(rem_a.iterrows(), 2):
@@ -391,7 +406,7 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
                                 'Bank_Data': b_row.to_frame().T,
                                 'Acc_Data': pd.concat([a1.to_frame().T, a2.to_frame().T])})
                 matched_b.append(b_row['Bank_index']); matched_a.extend([a1['Acc_index'], a2['Acc_index']])
-                break  # 此 acc 組合已配對，停止找下一筆銀行
+                break
             else:
                 print(f"  🟡 1:2 數學吻合但LLM不確定 → 待確認 Bank:{b_row['Bank_index']}")
                 pending.append({
@@ -400,7 +415,7 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
                     'Acc_Data': pd.concat([a1.to_frame().T, a2.to_frame().T]),
                     'Reason': rs
                 })
-                break  # 已進入待確認，同樣停止，避免重複
+                break
 
     rem_b = rem_b[~rem_b['Bank_index'].isin(matched_b)]
     rem_a = rem_a[~rem_a['Acc_index'].isin(matched_a)]
@@ -449,11 +464,15 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
         rem_b = rem_b[~rem_b['Bank_index'].isin(b_grp['Bank_index'])]
         rem_a = rem_a[~rem_a['Acc_index'].isin(a_grp['Acc_index'])]
 
-    # Step 5: 同摘要整批加總
-    print(f"\n⏳ [Step 5] 同摘要整批加總... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")
+    # Step 5: 同日期+摘要整批加總（先細粒度：同天同摘要；再粗粒度：同摘要跨天）
+    print(f"\n⏳ [Step 5] 同日期+摘要整批加總... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")
     matched_b, matched_a = [], []
     if '摘要' in rem_b.columns:
-        for memo, b_grp in rem_b.groupby('摘要'):
+        _rb = rem_b.copy()
+        _rb['_grp_date'] = pd.to_datetime(_rb['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
+        _rb['_grp_bank'] = _rb['代辦行'].fillna('') if '代辦行' in _rb.columns else ''
+        # 輪一：同天+代辦行+摘要（最細粒度，避免不同銀行同日同摘要混加）
+        for (grp_date, grp_bank, memo), b_grp in _rb.groupby(['_grp_date', '_grp_bank', '摘要']):
             b_ids = b_grp['Bank_index'].tolist()
             if any(bid in matched_b for bid in b_ids): continue
             b_sum = b_grp[bank_amt_col].sum()
@@ -461,13 +480,70 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
             cands = rem_a[(rem_a['業務金額'].abs() == b_sum) & (~rem_a['Acc_index'].isin(matched_a))]
             if len(cands) == 1:
                 a_row = cands.iloc[0]
-                print(f"  ✅ 整批[{memo}] {len(b_grp)}筆合計{b_sum:,.0f} ↔ Acc:{a_row['Acc_index']}")
-                history.append({'Type': f'{label} {len(b_grp)}對1整批', 'MatchReason': f'同摘要({memo})整批加總吻合',
+                print(f"  ✅ 整批[{grp_date} {grp_bank} {memo}] {len(b_grp)}筆合計{b_sum:,.0f} ↔ Acc:{a_row['Acc_index']}")
+                history.append({'Type': f'{label} {len(b_grp)}對1整批',
+                                'MatchReason': f'同日期+代辦行+摘要({grp_date} {grp_bank} {memo})整批加總吻合',
+                                'Bank_Data': b_grp, 'Acc_Data': a_row.to_frame().T})
+                matched_b.extend(b_ids)
+                matched_a.append(a_row['Acc_index'])
+        # 輪二：同摘要跨天（fallback，處理跨日分批入帳）
+        for memo, b_grp in _rb[~_rb['Bank_index'].isin(matched_b)].groupby('摘要'):
+            b_ids = b_grp['Bank_index'].tolist()
+            if any(bid in matched_b for bid in b_ids): continue
+            b_sum = b_grp[bank_amt_col].sum()
+            if b_sum == 0: continue
+            cands = rem_a[(rem_a['業務金額'].abs() == b_sum) & (~rem_a['Acc_index'].isin(matched_a))]
+            if len(cands) == 1:
+                a_row = cands.iloc[0]
+                print(f"  ✅ 整批[{memo}跨天] {len(b_grp)}筆合計{b_sum:,.0f} ↔ Acc:{a_row['Acc_index']}")
+                history.append({'Type': f'{label} {len(b_grp)}對1整批跨天',
+                                'MatchReason': f'同摘要({memo})跨天整批加總吻合',
                                 'Bank_Data': b_grp, 'Acc_Data': a_row.to_frame().T})
                 matched_b.extend(b_ids)
                 matched_a.append(a_row['Acc_index'])
     rem_b = rem_b[~rem_b['Bank_index'].isin(matched_b)]
     rem_a = rem_a[~rem_a['Acc_index'].isin(matched_a)]
+
+    # Step 2-C: 近似金額 1對1（±5% + 關鍵字/fuzzy，所有精確方法完成後才跑）
+    _APPROX_RATIO = 0.05
+    _FUZZY_THR    = 0.45
+    print(f"\n⏳ [Step 2-C] 近似金額輪（±5% + 關鍵字/fuzzy）... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")
+    for b_idx, b_row in rem_b.copy().iterrows():
+        if b_idx not in rem_b.index: continue
+        b_amt = b_row[bank_amt_col]
+        if b_amt <= 0: continue
+        tol = b_amt * _APPROX_RATIO
+        cands = rem_a[
+            (rem_a['業務金額'].abs() != b_amt) &
+            ((rem_a['業務金額'].abs() - b_amt).abs() <= tol)
+        ].copy()
+        if cands.empty: continue
+        bank_memo = str(b_row.get('附言', ''))
+        kw_hits = []
+        for _, cand in cands.iterrows():
+            km, kw = keyword_match(bank_memo, cand.get('描述.1', ''))
+            if km:
+                score = difflib.SequenceMatcher(None, bank_memo, str(cand.get('描述.1', ''))).ratio()
+                kw_hits.append((score, kw, cand))
+        if kw_hits:
+            kw_hits.sort(key=lambda x: x[0], reverse=True)
+            score, kw, a_sel = kw_hits[0]
+        else:
+            fuzzy_hits = []
+            for _, cand in cands.iterrows():
+                score = difflib.SequenceMatcher(None, bank_memo, str(cand.get('描述.1', ''))).ratio()
+                if score >= _FUZZY_THR:
+                    fuzzy_hits.append((score, cand))
+            if not fuzzy_hits: continue
+            fuzzy_hits.sort(key=lambda x: x[0], reverse=True)
+            score, a_sel = fuzzy_hits[0]
+            kw = f'fuzzy({score:.2f})'
+        diff_amt = abs(abs(a_sel['業務金額']) - b_amt)
+        print(f"  ✅ [2-C] Bank:{b_row['Bank_index']}({b_amt:,.0f}) ↔ Acc:{a_sel['Acc_index']}({abs(a_sel['業務金額']):,.0f}) 差額{diff_amt:,.0f} 「{kw}」")
+        history.append({'Type': f'{label} 1對1近似', 'MatchReason': f'近似金額(差額{diff_amt:,.0f})+關鍵字「{kw}」',
+                        'Bank_Data': b_row.to_frame().T, 'Acc_Data': a_sel.to_frame().T})
+        rem_a = rem_a[rem_a['Acc_index'] != a_sel['Acc_index']]
+        rem_b = rem_b.drop(b_idx)
 
     # Step 6: Coin-change 配對
     print(f"\n⏳ [Step 6] Coin-change配對... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")

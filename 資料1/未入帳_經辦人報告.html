@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset='utf-8'>
-<title>未入帳經辦人查找報告 (2026-05-11 13:25)</title>
+<title>未入帳經辦人查找報告 (2026-05-14 20:23)</title>
 
 <style>
   body { font-family:'Noto Sans TC','PingFang TC',system-ui,sans-serif;
@@ -46,7 +46,7 @@
 </head><body>
 <div class='container'>
 <h1>📋 未入帳經辦人查找報告</h1>
-<p style='color:#64748b'>產出時間：2026-05-11 13:25　｜　涵蓋 1 個月份</p>
+<p style='color:#64748b'>產出時間：2026-05-14 20:23　｜　涵蓋 1 個月份</p>
 
 <div class='summary-grid'>
   <div class='stat-card' style='border-top:4px solid #3b82f6'>
@@ -55,19 +55,19 @@
   </div>
   <div class='stat-card' style='border-top:4px solid #22c55e'>
     <div style='color:#64748b;font-size:13px'>成功找到經辦</div>
-    <div class='num' style='color:#16a34a'>4</div>
-    <div style='font-size:12px;color:#64748b'>50% 命中率</div>
+    <div class='num' style='color:#16a34a'>3</div>
+    <div style='font-size:12px;color:#64748b'>38% 命中率</div>
   </div>
   <div class='stat-card' style='border-top:4px solid #ef4444'>
     <div style='color:#64748b;font-size:13px'>需人工處理</div>
-    <div class='num' style='color:#dc2626'>4</div>
+    <div class='num' style='color:#dc2626'>5</div>
   </div>
   <div class='stat-card' style='border-top:4px solid #64748b'>
     <div style='color:#64748b;font-size:13px'>方法分佈</div>
     <div style='font-size:13px;margin-top:6px;text-align:left'>
-      🟢 未銷帳明細比對：3<br>
+      🟢 未銷帳明細比對：2<br>
       🟢 歷史資料庫比對：1<br>
-      🔴 人工處理：4
+      🔴 人工處理：5
     </div>
   </div>
 </div>
@@ -80,7 +80,7 @@
 </div>
 
 <div class='month-section'>
-<div class='month-title'>📅 11504　共 8 筆　｜ 找到 4 · 人工 4</div>
+<div class='month-title'>📅 11504　共 8 筆　｜ 找到 3 · 人工 5</div>
 <table>
 <thead><tr>
   <th>#</th>
@@ -112,10 +112,10 @@
   <td style='text-align:right'><span class='ain'>+102</span></td>
   <td style='text-align:right'>—</td>
   <td><span class='tag tag-um'>未入帳</span></td>
-  <td><span class='tag bm1'>🟢 未銷帳明細</span><br>
-      <span style='font-size:10px;color:#64748b'>未銷帳明細比對（金額完全吻合，摘要相似度 0.0）</span></td>
-  <td><b>A67（待確認）</b><br><span style='color:#94a3b8;font-size:11px'>A67</span></td>
-  <td class='src-cell'><b>未銷帳明細表_.xlsm</b><br>工作表：119010<br>金額：102<br>摘要：代付複委託客戶ADR Fee</td>
+  <td><span class='tag bm4'>🔴 人工處理</span><br>
+      <span style='font-size:10px;color:#64748b'>所有方法均未找到</span></td>
+  <td><span class='manual'>⚠ 人工處理</span></td>
+  <td class='src-cell'><span style="color:#94a3b8">—</span></td>
 </tr><tr>
   <td style='color:#94a3b8'>3</td>
   <td style='white-space:nowrap'>2026/04/15</td>
@@ -189,6 +189,6 @@
   🟢 <b>方法 1B（歷史資料庫）</b>：搜尋 handler_history.json（累積的帳務查詢 + 未銷帳明細）。同金額容差 + 關鍵字/fuzzy 比對。<br>
   兩者均先嘗試關鍵字子字串命中，再以 fuzzy 相似度排序取最高分。<br>
   🔴 <b>人工處理</b>：兩種方法均未找到，需打銀行或內部確認。<br><br>
-  歷史資料庫路徑：C:\Users\user\Desktop\專案\會計對帳\資料\handler_history.json
+  歷史資料庫路徑：C:\Users\user\Desktop\專案\會計對帳\handler_history.json
 </div>
 </div></body></html>

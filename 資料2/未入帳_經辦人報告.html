@@ -1,0 +1,186 @@
+
+<html><head><meta charset='utf-8'>
+<title>未入帳經辦人查找報告 (2026-05-09 20:20)</title>
+
+<style>
+  body { font-family: 'Noto Sans TC', 'PingFang TC', system-ui, sans-serif;
+         background:#f0f4f8; color:#1e293b; padding:32px; }
+  .container { max-width:1400px; margin:auto; }
+  h1 { color:#0f172a; border-bottom:4px solid #3b82f6; padding-bottom:12px; }
+  h2 { margin-top:40px; color:#1e40af; }
+  h3 { color:#374151; margin-bottom:6px; }
+  .summary-grid { display:grid; grid-template-columns:repeat(4,1fr);
+                  gap:16px; margin-bottom:32px; }
+  .stat-card { background:white; padding:20px; border-radius:12px;
+               box-shadow:0 4px 6px rgba(0,0,0,.06); text-align:center; }
+  .stat-card .num { font-size:36px; font-weight:800; }
+  .month-section { margin-bottom:60px; }
+  .month-title { font-size:20px; font-weight:700; padding:10px 16px;
+                 background:#1e40af; color:white; border-radius:8px;
+                 margin-bottom:20px; display:inline-block; }
+  table { width:100%; border-collapse:collapse; font-size:13px;
+          background:white; border-radius:12px; overflow:hidden;
+          box-shadow:0 4px 6px rgba(0,0,0,.06); margin-bottom:24px; }
+  th { background:#f1f5f9; padding:11px 14px; text-align:left;
+       border-bottom:2px solid #e2e8f0; font-weight:700; white-space:nowrap; }
+  td { padding:10px 14px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:#f8fafc; }
+  .tag { display:inline-block; padding:3px 10px; border-radius:999px;
+         font-size:11px; font-weight:700; }
+  .tag-unmatched { background:#fee2e2; color:#991b1b; }
+  .tag-pending   { background:#fef08a; color:#854d0e; }
+  .badge-m1 { background:#dcfce7; color:#166534; }
+  .badge-m2 { background:#dbeafe; color:#1e40af; }
+  .badge-m3 { background:#fef9c3; color:#92400e; }
+  .badge-m4 { background:#fee2e2; color:#991b1b; font-weight:800; }
+  .manual { color:#dc2626; font-weight:800; }
+  .amount-in  { color:#16a34a; font-weight:600; }
+  .amount-out { color:#dc2626; font-weight:600; }
+  .desc-hint { font-size:11px; color:#64748b; margin-top:3px; }
+  .legend { display:flex; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+  .legend-item { display:flex; align-items:center; gap:6px; font-size:13px; }
+</style>
+
+</head><body>
+<div class='container'>
+<h1>📋 未入帳經辦人查找報告</h1>
+<p style='color:#64748b'>產出時間：2026-05-09 20:20　｜　共涵蓋 4 個月份</p>
+
+<div class='summary-grid'>
+  <div class='stat-card' style='border-top:4px solid #3b82f6'>
+    <div style='color:#64748b;font-size:13px'>總標記筆數</div>
+    <div class='num' style='color:#1e40af'>8</div>
+  </div>
+  <div class='stat-card' style='border-top:4px solid #22c55e'>
+    <div style='color:#64748b;font-size:13px'>成功找到經辦</div>
+    <div class='num' style='color:#16a34a'>5</div>
+    <div style='font-size:12px;color:#64748b'>62% 命中率</div>
+  </div>
+  <div class='stat-card' style='border-top:4px solid #ef4444'>
+    <div style='color:#64748b;font-size:13px'>需人工處理</div>
+    <div class='num' style='color:#dc2626'>3</div>
+  </div>
+  <div class='stat-card' style='border-top:4px solid #64748b'>
+    <div style='color:#64748b;font-size:13px'>方法分佈</div>
+    <div style='font-size:13px;margin-top:6px'>
+      🟢 未銷帳明細比對：3<br>
+      🟢 帳務查詢比對：2<br>
+      🔵 固定規則：0<br>
+      🟡 歷史推論(未銷帳)：0<br>
+      🟡 歷史推論(帳務)：0<br>
+      🔴 人工處理：3
+    </div>
+  </div>
+</div>
+
+<div class='legend'>
+  <div class='legend-item'><span class='tag tag-unmatched'>未入帳</span> 銀行有紀錄、會計尚未入帳</div>
+  <div class='legend-item'><span class='tag tag-pending'>待確認</span> 金額相符但語意待確認</div>
+  <div class='legend-item'><span class='badge m1 tag'>🟢 方法1</span> 從未銷帳明細找到</div>
+  <div class='legend-item'><span class='badge m3 tag'>🟡 方法3</span> 歷史資料推論</div>
+  <div class='legend-item'><span class='badge m4 tag'>🔴 人工處理</span> 三種方法均未找到</div>
+</div>
+
+<div class='month-section'>
+<div class='month-title'>📅 11504　共 8 筆　｜ 找到 5 筆 · 人工 3 筆</div>
+<table>
+<thead><tr>
+  <th>#</th><th>日期</th><th>附言</th>
+  <th>存入金額</th><th>支出金額</th>
+  <th>類型</th><th>查找方法</th>
+  <th>經辦人</th><th>備考</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td style='color:#94a3b8'>1</td>
+  <td style='white-space:nowrap'>2026/04/09</td>
+  <td>********00016218</td>
+  <td style='text-align:right'><span class='amount-in'>+112,000</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m4'>🔴 人工處理</span></td>
+  <td><span class='manual'>⚠ 人工處理</span></td>
+  <td style='font-size:11px;color:#64748b'>所有方法均未找到</td>
+</tr><tr>
+  <td style='color:#94a3b8'>2</td>
+  <td style='white-space:nowrap'>2026/04/15</td>
+  <td>華南永昌證券投資<div class='desc-hint'>↳ 114/11~12月中國A股基金收入-華南永昌</div></td>
+  <td style='text-align:right'><span class='amount-in'>+102</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m1'>🟢 帳務查詢</span></td>
+  <td><b>羅翊瑄</b><br><span style='color:#64748b;font-size:11px'>A74</span></td>
+  <td style='font-size:11px;color:#64748b'>帳務查詢比對（金額±500，關鍵字命中，相似度0.26）</td>
+</tr><tr>
+  <td style='color:#94a3b8'>3</td>
+  <td style='white-space:nowrap'>2026/04/15</td>
+  <td>羅東分行<div class='desc-hint'>↳ 代墊銀行-115.03台灣電力電費(羅東分行)</div></td>
+  <td style='text-align:right'><span class='amount-in'>+54,741</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m1'>🟢 未銷帳明細</span></td>
+  <td><b>許嘉芳</b><br><span style='color:#64748b;font-size:11px'>A12</span></td>
+  <td style='font-size:11px;color:#64748b'>未銷帳明細比對（金額±2,000，關鍵字命中，相似度0.3）</td>
+</tr><tr>
+  <td style='color:#94a3b8'>4</td>
+  <td style='white-space:nowrap'>2026/04/16</td>
+  <td>富邦人壽<div class='desc-hint'>↳ 03/02複委託富邦手續費BTTH</div></td>
+  <td style='text-align:right'><span class='amount-in'>+2,591</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m1'>🟢 未銷帳明細</span></td>
+  <td><b>A67（待確認）</b><br><span style='color:#64748b;font-size:11px'>A67</span></td>
+  <td style='font-size:11px;color:#64748b'>未銷帳明細比對（金額±500，關鍵字命中，相似度0.19）</td>
+</tr><tr>
+  <td style='color:#94a3b8'>5</td>
+  <td style='white-space:nowrap'>2026/04/16</td>
+  <td>00728102008026</td>
+  <td style='text-align:right'><span class='amount-in'>+6,220</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m4'>🔴 人工處理</span></td>
+  <td><span class='manual'>⚠ 人工處理</span></td>
+  <td style='font-size:11px;color:#64748b'>所有方法均未找到</td>
+</tr><tr>
+  <td style='color:#94a3b8'>6</td>
+  <td style='white-space:nowrap'>2026/04/16</td>
+  <td>謝旻霏溢領薪資</td>
+  <td style='text-align:right'><span class='amount-in'>+16,727</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m4'>🔴 人工處理</span></td>
+  <td><span class='manual'>⚠ 人工處理</span></td>
+  <td style='font-size:11px;color:#64748b'>所有方法均未找到</td>
+</tr><tr>
+  <td style='color:#94a3b8'>7</td>
+  <td style='white-space:nowrap'>2026/04/17</td>
+  <td>頭份分行<div class='desc-hint'>↳ 應收富邦頭份01月租金收入</div></td>
+  <td style='text-align:right'><span class='amount-in'>+93,240</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m1'>🟢 帳務查詢</span></td>
+  <td><b>沈淑慧</b><br><span style='color:#64748b;font-size:11px'>A22</span></td>
+  <td style='font-size:11px;color:#64748b'>帳務查詢比對（金額±2,000，關鍵字命中，相似度0.24）</td>
+</tr><tr>
+  <td style='color:#94a3b8'>8</td>
+  <td style='white-space:nowrap'>2026/04/17</td>
+  <td>富邦敦南三月電<div class='desc-hint'>↳ 應收富邦建築02月份股代收入</div></td>
+  <td style='text-align:right'><span class='amount-in'>+1,147</span></td>
+  <td style='text-align:right'>—</td>
+  <td><span class='tag tag-unmatched'>未入帳</span></td>
+  <td><span class='tag badge-m1'>🟢 未銷帳明細</span></td>
+  <td><b>A72（待確認）</b><br><span style='color:#64748b;font-size:11px'>A72</span></td>
+  <td style='font-size:11px;color:#64748b'>未銷帳明細比對（金額±500，關鍵字命中，相似度0.29）</td>
+</tr></tbody></table></div>
+<div style='margin-top:60px;padding:20px;background:white;border-radius:12px;
+     box-shadow:0 4px 6px rgba(0,0,0,.06);font-size:13px;color:#64748b;'>
+  <b>查找方法說明</b><br>
+  🟢 <b>方法1A（未銷帳明細比對）</b>：金額分段容差（≤10,000用±500；其餘±2,000）+ 關鍵字命中，最準確。<br>
+  🟢 <b>方法1B（帳務查詢比對）</b>：同金額容差，搜尋當期帳務查詢（含8,876筆），直接取col42中文姓名。<br>
+  🔵 <b>方法2（固定規則）</b>：附言含特定關鍵字，直接對照預設對照表（需由會計部門維護）。<br>
+  🟡 <b>方法3A（未銷帳歷史推論）</b>：無金額限制，純文字相似度，取最常出現的經辦。<br>
+  🟡 <b>方法3B（帳務查詢歷史推論）</b>：同上，但搜尋範圍擴展到帳務查詢全表。<br>
+  🔴 <b>人工處理</b>：所有方法均未找到，需打銀行或內部確認。
+</div>
+</div></body></html>

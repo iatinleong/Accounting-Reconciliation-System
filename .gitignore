@@ -1,0 +1,11 @@
+# Office temporary files
+~$*
+
+# Claude Code config
+.claude/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/

@@ -12,8 +12,10 @@ pd.set_option('display.float_format', lambda x: '%.2f' % x)
 pd.set_option('display.max_columns', None)
 
 import openai
-api_key = ""
+api_key = "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"
 client = openai.OpenAI(api_key=api_key)
+_token_usage = {'input': 0, 'output': 0, 'calls': 0}
+_monthly_token_log = []
 
 # ── 1. 掃描資料夾：支援多份銀行對帳單與多份帳務查詢 ──
 # 同一底名（不同副檔名）只取「最佳」版本：xlsx > xlsm > xls
@@ -250,6 +252,9 @@ def llm_pick_best_candidate(bank_row, candidates_df, mode):
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0
         )
+        _token_usage['input']  += resp.usage.prompt_tokens
+        _token_usage['output'] += resp.usage.completion_tokens
+        _token_usage['calls']  += 1
         ans = resp.choices[0].message.content.strip()
         if ans in candidates_df['Acc_index'].values: return ans
     except Exception:
@@ -272,6 +277,9 @@ def llm_pick_best_bank_candidate(acc_row, bank_candidates_df, mode):
             messages=[{'role': 'user', 'content': prompt}],
             temperature=0
         )
+        _token_usage['input']  += resp.usage.prompt_tokens
+        _token_usage['output'] += resp.usage.completion_tokens
+        _token_usage['calls']  += 1
         ans = resp.choices[0].message.content.strip()
         if ans in bank_candidates_df['Bank_index'].values: return ans
     except Exception:
@@ -348,6 +356,32 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
         # 同金額的其他銀行筆（可能也在競爭同一筆會計）
         competing_banks = rem_b[(rem_b[bank_amt_col] == b_amt) & (rem_b.index != b_idx)]
         if len(candidates) == 1 and competing_banks.empty:
+            # 防止搶走 Step 5 整批配對：
+            # 若 rem_b 中有某摘要群組（≥2筆）合計==b_amt，且群組的
+            # 代辦行/附言/摘要任一欄位與會計描述關鍵字吻合，則本筆跳過留給 Step 5。
+            a_cand = candidates.iloc[0]
+            _acc_desc = str(a_cand.get('描述.1', ''))
+            _skip_for_batch = False
+            if '摘要' in rem_b.columns:
+                # 用與 Step 5 相同的細粒度分組（日期+代辦行+摘要），
+                # 避免不同銀行的同摘要筆被混合加總，導致合計失準。
+                _rb2 = rem_b.copy()
+                _rb2['_grp_date'] = pd.to_datetime(_rb2['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
+                _rb2['_grp_bank'] = _rb2['代辦行'].fillna('') if '代辦行' in _rb2.columns else ''
+                for (_gd, _gb, _memo), _grp in _rb2.groupby(['_grp_date', '_grp_bank', '摘要']):
+                    if len(_grp) <= 1: continue
+                    _gs = _grp[bank_amt_col].sum()
+                    if abs(_gs - b_amt) > 0.01: continue
+                    for _col in ['代辦行', '附言', '摘要']:
+                        if _col not in _grp.columns: continue
+                        _km, _kw = keyword_match(str(_grp[_col].iloc[0]), _acc_desc)
+                        if _km:
+                            print(f"  ⏭️ Bank:{b_row['Bank_index']}({b_amt:,.0f}) [{_gd} {_gb} {_memo}]{len(_grp)}筆合計吻合且關鍵字「{_kw}」與Acc語意相符，保留給Step5整批")
+                            _skip_for_batch = True
+                            break
+                    if _skip_for_batch: break
+            if _skip_for_batch:
+                continue
             # 真正唯一（銀行唯一 + 會計唯一），但需語意確認才配對
             a_row = candidates.iloc[0]
             km, kw = keyword_match(b_row.get('附言', ''), a_row.get('描述.1', ''))
@@ -455,11 +489,28 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
 
     # Step 4: 同金額 N對N 批次
     print(f"\n⏳ [Step 4] N對N 同金額批次... (庫存: 銀行{len(rem_b)} / 會計{len(rem_a)})")
+    # 預先從會計端標記「有 Step 5 整批群組可配」的 acc entry，避免 Step 4 搶先消耗
+    _s4_rb = rem_b.copy()
+    _s4_rb['_grp_date'] = pd.to_datetime(_s4_rb['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
+    _s4_rb['_grp_bank'] = _s4_rb['代辦行'].fillna('') if '代辦行' in _s4_rb.columns else ''
+    _reserved_acc_ids = set()
+    if '摘要' in _s4_rb.columns:
+        for (_gd, _gb, _gm), _gg in _s4_rb.groupby(['_grp_date', '_grp_bank', '摘要']):
+            if len(_gg) <= 1: continue
+            _gs = _gg[bank_amt_col].sum()
+            _matching_acc = rem_a[rem_a['業務金額'].abs() == _gs]
+            if len(_matching_acc) == 1:
+                _reserved_acc_ids.add(_matching_acc.iloc[0]['Acc_index'])
+
     for b_amt, _ in rem_b.groupby(bank_amt_col):
         if rem_b.empty or rem_a.empty or b_amt == 0: break
         b_grp = rem_b[rem_b[bank_amt_col] == b_amt]
         a_grp = rem_a[rem_a['業務金額'].abs() == b_amt]
         if len(b_grp) == 0 or len(a_grp) == 0 or len(b_grp) != len(a_grp): continue
+        # 若 a_grp 內含「保留給 Step 5 整批」的會計筆，跳過
+        if a_grp['Acc_index'].isin(_reserved_acc_ids).any():
+            print(f"  ⏭️ [Step4] a_amt={b_amt:,.0f} 含Step5整批保留acc，跳過")
+            continue
         history.append({'Type': f'{label} {len(b_grp)}對{len(a_grp)}批次', 'Bank_Data': b_grp, 'Acc_Data': a_grp})
         rem_b = rem_b[~rem_b['Bank_index'].isin(b_grp['Bank_index'])]
         rem_a = rem_a[~rem_a['Acc_index'].isin(a_grp['Acc_index'])]
@@ -1147,6 +1198,7 @@ def build_html_report_with_soft_match(all_histories, all_rems, soft_matches, dat
 # ══════════════════════════════════════════════════
 def run_month_pipeline(month_code):
     target_date = month_code_to_date(month_code)
+    _snap = {k: v for k, v in _token_usage.items()}   # 月初快照
     bank_path = convert_to_xlsx(bank_files[month_code])
     print(f'\n{"="*60}')
     print(f'🗓️  處理月份：{target_date}  ({os.path.basename(bank_path)})')
@@ -1292,9 +1344,18 @@ def run_month_pipeline(month_code):
         acc_reversal_log=acc_reversal_log,
         pre_reversal_log=pre_reversal_log
     )
+    month_tokens = {
+        'month': target_date,
+        'calls':  _token_usage['calls']  - _snap['calls'],
+        'input':  _token_usage['input']  - _snap['input'],
+        'output': _token_usage['output'] - _snap['output'],
+    }
+    month_tokens['total'] = month_tokens['input'] + month_tokens['output']
+    _monthly_token_log.append(month_tokens)
     print(f'\n✅ [{month_code}] {target_date} 完成！')
     print(f'   HTML  → {os.path.basename(output_html)}')
     print(f'   Excel → {os.path.basename(output_xlsx)}')
+    print(f'   LLM   → calls:{month_tokens["calls"]} input:{month_tokens["input"]:,} output:{month_tokens["output"]:,}')
 
 
 # ══════════════════════════════════════════════════
@@ -1302,3 +1363,24 @@ def run_month_pipeline(month_code):
 # ══════════════════════════════════════════════════
 for month_code in sorted(bank_files.keys()):
     run_month_pipeline(month_code)
+
+print(f'\n{"="*50}')
+print(f'📊 LLM Token 使用統計 (gpt-4o-mini)')
+print(f'   呼叫次數  : {_token_usage["calls"]:>8,} 次')
+print(f'   Input  tokens: {_token_usage["input"]:>8,}')
+print(f'   Output tokens: {_token_usage["output"]:>8,}')
+print(f'   Total  tokens: {_token_usage["input"] + _token_usage["output"]:>8,}')
+print(f'{"="*50}')
+
+# ── 逐月 Token 記錄寫出 ──
+import datetime, csv
+_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'token_log.csv')
+_file_exists = os.path.isfile(_log_path)
+with open(_log_path, 'a', newline='', encoding='utf-8') as f:
+    writer = csv.DictWriter(f, fieldnames=['run_at', 'month', 'calls', 'input', 'output', 'total'])
+    if not _file_exists:
+        writer.writeheader()
+    _run_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for row in _monthly_token_log:
+        writer.writerow({'run_at': _run_at, **row})
+print(f'💾 Token 記錄已附加至 token_log.csv')

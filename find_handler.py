@@ -17,7 +17,10 @@ from openpyxl.styles import Font, Alignment
 from copy import copy
 from datetime import datetime
 
-sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
+try:
+    sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1, closefd=False)
+except Exception:
+    pass  # 在 Streamlit / StringIO 環境下跳過
 
 # ══════════════════════════════════════════════════
 # 0. 設定
@@ -43,7 +46,27 @@ STAFF_TABLE = {
     'A17': '陳曉青', 'A18': '李芳姿', 'A19': '吳佩蓉', 'A20': '張鈴宜',
     'A21': '陳雅玲', 'A22': '沈淑慧', 'A23': '陳玉玲', 'A24': '蘇怡珊',
     'A25': '陳彥如', 'A26': '陳秋安', 'A27': '李宜蓁', 'A28': '陳淑瑜',
+    'A65': '俞昕妤', 'A67': '詹柔珊', 'A72': '黃琬芸', 'A74': '羅翊瑄',
 }
+
+# 固定關鍵字規則：附言出現這些字串時直接指定經辦（優先於 AR / 歷史資料庫查找）。
+# 格式：(附言子字串, 經辦代碼)
+# 帳號型態（含 * 遮碼）只需填末段數字即可，比對時會先移除 *。
+KEYWORD_RULES: list[tuple[str, str]] = [
+    ('鎵興',             'A67'),
+    ('漢神',             'A67'),
+    ('必翔實業',         'A67'),
+    ('行動週期',         'A67'),
+    ('洪冠伶',           'A67'),
+    ('臺北地院',         'A67'),
+    ('01457500',         'A12'),
+    ('00016218',         'A72'),
+    ('00214701',         'A72'),
+    ('35026268',         'A72'),
+    ('00715176031360',   'A11'),   # 亦可能 A72，有疑義時請人工確認
+    ('定期定額',         'A65'),
+    ('臺灣集中保管結算', 'A12'),   # 亦可能 A74，有疑義時請人工確認
+]
 
 FUZZY_THRESHOLD  = 0.45  # pure fuzzy 路徑的最低分
 EXACT_MIN_FUZZY  = 0.15  # same-handler shortcut 的最低相似度（低於此視為文字完全不相關）
@@ -185,49 +208,52 @@ def update_handler_history() -> dict:
         print(f"  掃描未銷帳明細：{fname_ar}")
         try:
             xl = pd.ExcelFile(AR_PATH, engine='openpyxl')
-            for sheet_name in xl.sheet_names:
-                if sheet_name in AR_SKIP:
-                    continue
-                df = pd.read_excel(AR_PATH, sheet_name=sheet_name, header=None,
-                                   engine='openpyxl', keep_default_na=False)
-                if len(df) < 7:
-                    continue
-                sheet_new = 0
-                for _, row in df.iloc[6:].iterrows():
-                    amt_raw = row[3] if row[3] != '' else None
-                    if amt_raw is None:
+            try:
+                for sheet_name in xl.sheet_names:
+                    if sheet_name in AR_SKIP:
                         continue
-                    try:
-                        amt = abs(float(str(amt_raw).replace(',', '')))
-                    except Exception:
+                    df = pd.read_excel(AR_PATH, sheet_name=sheet_name, header=None,
+                                       engine='openpyxl', keep_default_na=False)
+                    if len(df) < 7:
                         continue
-                    if amt <= 0:
-                        continue
-                    desc    = str(row[8]).strip()  if row[8]  != '' else ''
-                    handler = str(row[18]).strip() if row[18] != '' else ''
-                    if not handler or not desc:
-                        continue
-                    key = _entry_key(fname_ar, sheet_name, desc, amt)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    new_count += 1
-                    sheet_new += 1
-                    if handler not in history:
-                        history[handler] = {
-                            'name': STAFF_TABLE.get(handler, ''),
-                            'entries': []
-                        }
-                    history[handler]['entries'].append({
-                        'src_file':  fname_ar,
-                        'src_sheet': sheet_name,
-                        'src_type':  'ar',
-                        'date':      '',
-                        'desc':      desc,
-                        'amount':    amt,
-                    })
-                if sheet_new:
-                    print(f"    {fname_ar} / {sheet_name}：新增 {sheet_new} 筆")
+                    sheet_new = 0
+                    for _, row in df.iloc[6:].iterrows():
+                        amt_raw = row[3] if row[3] != '' else None
+                        if amt_raw is None:
+                            continue
+                        try:
+                            amt = abs(float(str(amt_raw).replace(',', '')))
+                        except Exception:
+                            continue
+                        if amt <= 0:
+                            continue
+                        desc    = str(row[8]).strip()  if row[8]  != '' else ''
+                        handler = str(row[18]).strip() if row[18] != '' else ''
+                        if not handler or not desc:
+                            continue
+                        key = _entry_key(fname_ar, sheet_name, desc, amt)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        new_count += 1
+                        sheet_new += 1
+                        if handler not in history:
+                            history[handler] = {
+                                'name': STAFF_TABLE.get(handler, ''),
+                                'entries': []
+                            }
+                        history[handler]['entries'].append({
+                            'src_file':  fname_ar,
+                            'src_sheet': sheet_name,
+                            'src_type':  'ar',
+                            'date':      '',
+                            'desc':      desc,
+                            'amount':    amt,
+                        })
+                    if sheet_new:
+                        print(f"    {fname_ar} / {sheet_name}：新增 {sheet_new} 筆")
+            finally:
+                xl.close()
         except Exception as e:
             print(f"    讀取未銷帳明細失敗: {e}")
 
@@ -251,32 +277,35 @@ def load_ar_table(path=AR_PATH) -> pd.DataFrame:
     """載入未銷帳明細表（即時，供方法 1A/3A 使用）"""
     xl   = pd.ExcelFile(path, engine='openpyxl')
     rows = []
-    for sheet in xl.sheet_names:
-        if sheet in AR_SKIP:
-            continue
-        df = pd.read_excel(path, sheet_name=sheet, header=None,
-                           engine='openpyxl', keep_default_na=False)
-        if len(df) < 7:
-            continue
-        for _, row in df.iloc[6:].iterrows():
-            amt_val = row[3] if row[3] != '' else None
-            if amt_val is None:
+    try:
+        for sheet in xl.sheet_names:
+            if sheet in AR_SKIP:
                 continue
-            amt = parse_amount_str(amt_val)
-            if amt <= 0:
+            df = pd.read_excel(path, sheet_name=sheet, header=None,
+                               engine='openpyxl', keep_default_na=False)
+            if len(df) < 7:
                 continue
-            desc    = str(row[8]).strip()  if row[8]  != '' else ''
-            handler = str(row[18]).strip() if row[18] != '' else ''
-            rows.append({
-                '_handler': handler,
-                '_name':    STAFF_TABLE.get(handler, ''),
-                '_desc':    desc,
-                '_amount':  amt,
-                '_date':    '',
-                '_file':    os.path.basename(AR_PATH),
-                '_sheet':   sheet,
-                '_src_type': 'ar',
-            })
+            for _, row in df.iloc[6:].iterrows():
+                amt_val = row[3] if row[3] != '' else None
+                if amt_val is None:
+                    continue
+                amt = parse_amount_str(amt_val)
+                if amt <= 0:
+                    continue
+                desc    = str(row[8]).strip()  if row[8]  != '' else ''
+                handler = str(row[18]).strip() if row[18] != '' else ''
+                rows.append({
+                    '_handler': handler,
+                    '_name':    STAFF_TABLE.get(handler, ''),
+                    '_desc':    desc,
+                    '_amount':  amt,
+                    '_date':    '',
+                    '_file':    os.path.basename(path),
+                    '_sheet':   sheet,
+                    '_src_type': 'ar',
+                })
+    finally:
+        xl.close()
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
         '_handler','_name','_desc','_amount','_date','_file','_sheet','_src_type'])
 
@@ -316,14 +345,28 @@ def fuzzy_score(a: str, b: str) -> float:
 
 def keyword_hit(bank_remark: str, ar_desc: str) -> bool:
     """
-    從 bank_remark 滑窗取 CJK 子字串（由長到短，最短 MIN_KEYWORD_LEN 字），
-    只要有一個出現在 ar_desc 中即命中。
-    限制最短 3 字，避免「富邦」「薪資」等泛用詞誤觸。
+    雙向關鍵字比對：
+      前向 CJK   ：bank 的 CJK 子字串（≥ MIN_KEYWORD_LEN）→ 出現在 AR 描述
+      前向英數   ：bank 英數 token（≥ 4 字元）→ 出現在 AR 描述
+      反向英數   ：AR 英數 token（≥ 4 字元）→ 出現在 bank 附言（修正 #77348 型態）
+    注意：反向 CJK 不做（"國際"等泛詞會造成誤配），2-char 前向 CJK 僅在 _search_table
+    精確金額路徑（tol=0）中以 EXACT_MIN_FUZZY 閾值另行處理。
     """
     if not bank_remark or not ar_desc:
         return False
+    # 前向 CJK（≥ MIN_KEYWORD_LEN）
     for sub in cjk_substrings(bank_remark, min_len=MIN_KEYWORD_LEN):
         if sub in ar_desc:
+            return True
+    bank_up = bank_remark.upper()
+    ar_up   = ar_desc.upper()
+    # 前向英數
+    for tok in re.findall(r'[A-Za-z0-9]{4,}', bank_remark):
+        if tok.upper() in ar_up:
+            return True
+    # 反向英數：AR token 是否為 bank 的子字串（e.g. "77348" in "07777348"）
+    for tok in re.findall(r'[A-Za-z0-9]{4,}', ar_desc):
+        if tok.upper() in bank_up:
             return True
     return False
 
@@ -357,8 +400,21 @@ def _search_table(table: pd.DataFrame, bank_remark: str, bank_amount: float,
         cands['_score'] = cands['_desc'].apply(lambda d: fuzzy_score(bank_remark, d))
         hits = cands[cands['_score'] >= FUZZY_THRESHOLD].copy()
         if hits.empty:
-            return None
-        hits = hits.sort_values('_score', ascending=False)
+            # 精確金額時允許 2-char CJK 前向配對（e.g.「京城」），但 fuzzy 需 ≥ EXACT_MIN_FUZZY
+            if tol == 0:
+                kw2 = cands['_desc'].apply(
+                    lambda d: any(sub in d for sub in cjk_substrings(bank_remark, min_len=2))
+                )
+                hits2 = cands.loc[kw2].copy()
+                if not hits2.empty:
+                    hits2['_score'] = hits2['_desc'].apply(lambda d: fuzzy_score(bank_remark, d))
+                    hits2 = hits2[hits2['_score'] >= EXACT_MIN_FUZZY].copy()
+                    if not hits2.empty:
+                        hits = hits2.sort_values('_score', ascending=False)
+            if hits.empty:
+                return None
+        else:
+            hits = hits.sort_values('_score', ascending=False)
     else:
         hits['_score'] = hits['_desc'].apply(lambda d: fuzzy_score(bank_remark, d))
         hits = hits.sort_values('_score', ascending=False)
@@ -400,6 +456,15 @@ def find_handler(bank_remark: str, bank_amount: float,
             src_date=src_date,
             src_amount=src_amount,
         )
+
+    # ── Step 0：固定關鍵字規則（優先於所有 AR / 歷史查找）────
+    remark_no_star = remark.replace('*', '')
+    for pattern, code in KEYWORD_RULES:
+        if pattern in remark or pattern in remark_no_star:
+            return make_result(
+                code, '', '0',
+                f'固定關鍵字規則「{pattern}」',
+            )
 
     # ── 精確 1A：未銷帳明細，金額完全吻合 ────────────
     r = _search_table(ar_table, remark, amount, tol=0)
@@ -554,6 +619,7 @@ def update_excel(xlsx_path: str, ar_table: pd.DataFrame, hist_df: pd.DataFrame) 
 # ══════════════════════════════════════════════════
 
 METHOD_LABEL = {
+    '0':  ('🔵', '固定規則'),
     '1A': ('🟢', '未銷帳明細'),
     '1B': ('🟢', '歷史資料庫'),
     4:    ('🔴', '人工處理'),
@@ -563,8 +629,8 @@ def _fmt_src(x: dict) -> str:
     """格式化來源依據欄，供 HTML 使用。"""
     if x['method'] == 4:
         return '<span style="color:#94a3b8">—</span>'
-    if x['method'] == 2:
-        return f'<span style="color:#1e40af">固定關鍵字規則</span>'
+    if x['method'] == '0':
+        return f'<span style="color:#1e40af">固定關鍵字規則：{x.get("note","")}</span>'
 
     parts = []
     if x.get('src_file'):
@@ -629,6 +695,7 @@ def build_html_report(all_results: dict, output_path: str):
     total        = sum(len(v) for v in all_results.values())
     manual_count = sum(sum(1 for x in v if x['method'] == 4) for v in all_results.values())
     found_count  = total - manual_count
+    m0  = sum(sum(1 for x in v if x['method'] == '0')  for v in all_results.values())
     m1a = sum(sum(1 for x in v if x['method'] == '1A') for v in all_results.values())
     m1b = sum(sum(1 for x in v if x['method'] == '1B') for v in all_results.values())
     hit_pct = f'{found_count/total*100:.0f}' if total else '0'
@@ -659,6 +726,7 @@ def build_html_report(all_results: dict, output_path: str):
   <div class='stat-card' style='border-top:4px solid #64748b'>
     <div style='color:#64748b;font-size:13px'>方法分佈</div>
     <div style='font-size:13px;margin-top:6px;text-align:left'>
+      🔵 固定關鍵字規則：{m0}<br>
       🟢 未銷帳明細比對：{m1a}<br>
       🟢 歷史資料庫比對：{m1b}<br>
       🔴 人工處理：{manual_count}
@@ -696,7 +764,7 @@ def build_html_report(all_results: dict, output_path: str):
 </tr></thead>
 <tbody>
 """
-        badge_map = {'1A':'bm1','1B':'bm1',4:'bm4'}
+        badge_map = {'0':'bm2','1A':'bm1','1B':'bm1',4:'bm4'}
         for i, x in enumerate(items, 1):
             badge_cls = badge_map.get(x['method'], '')
             emoji, label = METHOD_LABEL.get(x['method'], ('', ''))
@@ -793,3 +861,52 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ══════════════════════════════════════════════════
+# Streamlit 入口：接受自訂路徑
+# ══════════════════════════════════════════════════
+
+def run_pipeline(data_dir: str, history_path: str, output_dir: str) -> dict:
+    """
+    data_dir    : 包含 帳務查詢-*.xlsx、未銷帳明細表_.xlsm、未入帳清單_*.xlsx 的目錄
+    history_path: handler_history.json 的路徑（持久存放，跨次執行累積）
+    output_dir  : 輸出 HTML 報告的目錄
+    回傳 all_results: {月份碼: [結果列表]}
+    """
+    global DATA_DIR, AR_PATH, HISTORY_PATH, OUTPUT_DIR
+    _orig = (DATA_DIR, AR_PATH, HISTORY_PATH, OUTPUT_DIR)
+    DATA_DIR = data_dir
+    AR_PATH = _find_ar_path(data_dir)
+    HISTORY_PATH = history_path
+    OUTPUT_DIR = output_dir
+
+    try:
+        history = update_handler_history()
+        ar_table = load_ar_table(path=AR_PATH)
+        print(f"  共 {len(ar_table)} 筆（{ar_table['_sheet'].nunique()} 個科目）")
+        hist_df = history_to_df(history)
+        print(f"  共 {len(hist_df)} 筆歷史記錄（{hist_df['_handler'].nunique()} 位經辦）")
+
+        xlsx_files = sorted(glob.glob(os.path.join(data_dir, '未入帳清單_*.xlsx')))
+        xlsx_files = [f for f in xlsx_files if not os.path.basename(f).startswith('~$')]
+        if not xlsx_files:
+            print(f"在 {data_dir} 找不到未入帳清單 xlsx 檔案")
+            return {}
+
+        all_results = {}
+        for path in xlsx_files:
+            month = os.path.basename(path).replace('未入帳清單_', '').replace('.xlsx', '')
+            print(f"\n處理 {month}…")
+            items = update_excel(path, ar_table, hist_df)
+            all_results[month] = items
+
+        html_path = os.path.join(output_dir, '未入帳_經辦人報告.html')
+        build_html_report(all_results, html_path)
+
+        total = sum(len(v) for v in all_results.values())
+        found = sum(sum(1 for x in v if x['method'] != 4) for v in all_results.values())
+        print(f"\n完成！總計 {total} 筆，找到經辦 {found} 筆，人工處理 {total-found} 筆")
+        return all_results
+    finally:
+        DATA_DIR, AR_PATH, HISTORY_PATH, OUTPUT_DIR = _orig

@@ -9,3 +9,13 @@ __pycache__/
 *.pyc
 *.pyo
 .ipynb_checkpoints/
+
+# Runtime outputs
+log/
+token_log.csv
+
+# Sample data folders
+資料/
+資料1/
+資料2/
+資料3/

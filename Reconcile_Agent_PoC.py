@@ -11,9 +11,12 @@ warnings.filterwarnings('ignore')
 pd.set_option('display.float_format', lambda x: '%.2f' % x)
 pd.set_option('display.max_columns', None)
 
-import openai
-api_key = "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"
-client = openai.OpenAI(api_key=api_key)
+import google.generativeai as genai
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY", ""))
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+_gemini_model = genai.GenerativeModel(_GEMINI_MODEL)
 _token_usage = {'input': 0, 'output': 0, 'calls': 0}
 _monthly_token_log = []
 
@@ -247,15 +250,11 @@ def llm_pick_best_candidate(bank_row, candidates_df, mode):
 {candidates_df[['Acc_index', '描述.1']].to_json(orient='records', force_ascii=False)}
 請只回傳最符合的該筆 Acc_index 字串。若都不吻合則回傳 None。"""
     try:
-        resp = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0
-        )
-        _token_usage['input']  += resp.usage.prompt_tokens
-        _token_usage['output'] += resp.usage.completion_tokens
+        resp = _gemini_model.generate_content(prompt)
+        _token_usage['input']  += resp.usage_metadata.prompt_token_count
+        _token_usage['output'] += resp.usage_metadata.candidates_token_count
         _token_usage['calls']  += 1
-        ans = resp.choices[0].message.content.strip()
+        ans = resp.text.strip()
         if ans in candidates_df['Acc_index'].values: return ans
     except Exception:
         pass
@@ -272,15 +271,11 @@ def llm_pick_best_bank_candidate(acc_row, bank_candidates_df, mode):
 {bank_candidates_df[['Bank_index', '附言', '摘要']].to_json(orient='records', force_ascii=False)}
 請只回傳最符合的該筆 Bank_index 字串。若都不吻合則回傳 None。"""
     try:
-        resp = client.chat.completions.create(
-            model='gpt-4o-mini',
-            messages=[{'role': 'user', 'content': prompt}],
-            temperature=0
-        )
-        _token_usage['input']  += resp.usage.prompt_tokens
-        _token_usage['output'] += resp.usage.completion_tokens
+        resp = _gemini_model.generate_content(prompt)
+        _token_usage['input']  += resp.usage_metadata.prompt_token_count
+        _token_usage['output'] += resp.usage_metadata.candidates_token_count
         _token_usage['calls']  += 1
-        ans = resp.choices[0].message.content.strip()
+        ans = resp.text.strip()
         if ans in bank_candidates_df['Bank_index'].values: return ans
     except Exception:
         pass
@@ -363,12 +358,12 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
             _acc_desc = str(a_cand.get('描述.1', ''))
             _skip_for_batch = False
             if '摘要' in rem_b.columns:
-                # 用與 Step 5 相同的細粒度分組（日期+代辦行+摘要），
-                # 避免不同銀行的同摘要筆被混合加總，導致合計失準。
+                # 用與 Step 5 相同的細粒度分組（日期+代辦行+摘要+金額），
+                # 避免不同金額的筆被混合加總，導致合計失準。
                 _rb2 = rem_b.copy()
                 _rb2['_grp_date'] = pd.to_datetime(_rb2['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
                 _rb2['_grp_bank'] = _rb2['代辦行'].fillna('') if '代辦行' in _rb2.columns else ''
-                for (_gd, _gb, _memo), _grp in _rb2.groupby(['_grp_date', '_grp_bank', '摘要']):
+                for (_gd, _gb, _memo, _), _grp in _rb2.groupby(['_grp_date', '_grp_bank', '摘要', bank_amt_col]):
                     if len(_grp) <= 1: continue
                     _gs = _grp[bank_amt_col].sum()
                     if abs(_gs - b_amt) > 0.01: continue
@@ -495,7 +490,7 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
     _s4_rb['_grp_bank'] = _s4_rb['代辦行'].fillna('') if '代辦行' in _s4_rb.columns else ''
     _reserved_acc_ids = set()
     if '摘要' in _s4_rb.columns:
-        for (_gd, _gb, _gm), _gg in _s4_rb.groupby(['_grp_date', '_grp_bank', '摘要']):
+        for (_gd, _gb, _gm, _), _gg in _s4_rb.groupby(['_grp_date', '_grp_bank', '摘要', bank_amt_col]):
             if len(_gg) <= 1: continue
             _gs = _gg[bank_amt_col].sum()
             _matching_acc = rem_a[rem_a['業務金額'].abs() == _gs]
@@ -522,8 +517,8 @@ def reconcile_engine(df_bank, df_acc, mode='Income', pending=None):
         _rb = rem_b.copy()
         _rb['_grp_date'] = pd.to_datetime(_rb['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
         _rb['_grp_bank'] = _rb['代辦行'].fillna('') if '代辦行' in _rb.columns else ''
-        # 輪一：同天+代辦行+摘要（最細粒度，避免不同銀行同日同摘要混加）
-        for (grp_date, grp_bank, memo), b_grp in _rb.groupby(['_grp_date', '_grp_bank', '摘要']):
+        # 輪一：同天+代辦行+摘要+金額（最細粒度，避免不同金額的筆被混合加總）
+        for (grp_date, grp_bank, memo, _), b_grp in _rb.groupby(['_grp_date', '_grp_bank', '摘要', bank_amt_col]):
             b_ids = b_grp['Bank_index'].tolist()
             if any(bid in matched_b for bid in b_ids): continue
             b_sum = b_grp[bank_amt_col].sum()
@@ -787,42 +782,79 @@ def build_excel_report(bank_path, inc_rem_b, exp_rem_b, soft_matches, output_pat
     ws.column_dimensions[openpyxl.utils.get_column_letter(insert_col)].width   = 10
     ws.column_dimensions[openpyxl.utils.get_column_letter(insert_col + 1)].width = 10
 
-    # 按日期彙總
-    summary_row = ws.max_row + 2
-    bold = Font(bold=True)
-    header_fill = PatternFill('solid', fgColor='D9E1F2')
-    center = Alignment(horizontal='center')
+    # ── 每日變動數確認 sheet ──
+    if '每日變動數確認' in wb.sheetnames:
+        del wb['每日變動數確認']
+    ws2 = wb.create_sheet('每日變動數確認')
+
     bank_df = pd.concat([bank_in, bank_out])
     acc_df  = pd.concat([acc_in,  acc_out])
     bank_df['_date'] = pd.to_datetime(bank_df['交易日期'], errors='coerce').dt.strftime('%Y/%m/%d')
     acc_df['_date']  = acc_df['業務日期_格式化'] if '業務日期_格式化' in acc_df.columns else pd.to_datetime(acc_df['業務日期'], errors='coerce').dt.strftime('%Y/%m/%d')
     all_dates = sorted(set(bank_df['_date'].dropna()) | set(acc_df['_date'].dropna()))
-    col_start = 1
-    c = ws.cell(row=summary_row, column=col_start, value='銀行對賬單')
-    c.font = Font(bold=True, size=12); c.fill = header_fill
-    c = ws.cell(row=summary_row, column=col_start + 4, value='會計賬務')
-    c.font = Font(bold=True, size=12); c.fill = PatternFill('solid', fgColor='E2EFDA')
-    for i, h in enumerate(['交易日期', '銀行收入', '銀行支出', '銀行變動數']):
-        c = ws.cell(row=summary_row+1, column=col_start+i, value=h)
-        c.font = bold; c.fill = header_fill; c.alignment = center
-    for i, h in enumerate(['交易日期', '會計收入', '會計支出', '會計變動數']):
-        c = ws.cell(row=summary_row+1, column=col_start+4+i, value=h)
-        c.font = bold; c.fill = PatternFill('solid', fgColor='E2EFDA'); c.alignment = center
-    for r, date in enumerate(all_dates):
-        row = summary_row + 2 + r
-        b_in  = bank_df[(bank_df['_date']==date) & (bank_df['存入金額']>0)]['存入金額'].sum() if '存入金額' in bank_df else 0
-        b_out = bank_df[(bank_df['_date']==date) & (bank_df['支出金額']>0)]['支出金額'].sum() if '支出金額' in bank_df else 0
+
+    bank_fill = PatternFill('solid', fgColor='D9E1F2')
+    acc_fill  = PatternFill('solid', fgColor='E2EFDA')
+    chk_fill  = PatternFill('solid', fgColor='FFF2CC')
+    bold      = Font(bold=True)
+    center    = Alignment(horizontal='center', vertical='center')
+    right     = Alignment(horizontal='right',  vertical='center')
+    num_fmt   = '#,##0;-#,##0;"-"'
+
+    # Row 1：section headers（合併儲存格）
+    for c_start, c_end, title, fill in [
+        (1, 4,  '銀行對帳單', bank_fill),
+        (5, 8,  '會計帳務',   acc_fill),
+        (9, 12, '檢核',       chk_fill),
+    ]:
+        cell = ws2.cell(row=1, column=c_start, value=title)
+        cell.font = Font(bold=True, size=12); cell.fill = fill; cell.alignment = center
+        ws2.merge_cells(start_row=1, start_column=c_start, end_row=1, end_column=c_end)
+
+    # Row 2：欄位標題
+    col_headers = ['交易日期', '銀行收入', '銀行支出', '淨變動',
+                   '交易日期', '借方',     '貸方',     '淨變動',
+                   '交易日期', '借方差異', '貸方差異', '總差異']
+    col_fills   = [bank_fill]*4 + [acc_fill]*4 + [chk_fill]*4
+    for i, (h, f) in enumerate(zip(col_headers, col_fills)):
+        cell = ws2.cell(row=2, column=i+1, value=h)
+        cell.font = bold; cell.fill = f; cell.alignment = center
+
+    # 資料列
+    for r, date in enumerate(all_dates, start=3):
+        b_in  = bank_df[(bank_df['_date']==date) & (bank_df['存入金額']>0)]['存入金額'].sum() if '存入金額' in bank_df.columns else 0
+        b_out = bank_df[(bank_df['_date']==date) & (bank_df['支出金額']>0)]['支出金額'].sum() if '支出金額' in bank_df.columns else 0
         a_in  = acc_df[(acc_df['_date']==date) & (acc_df['業務金額']>0)]['業務金額'].sum()
         a_out = abs(acc_df[(acc_df['_date']==date) & (acc_df['業務金額']<0)]['業務金額'].sum())
-        for col, val in zip(
-            [col_start, col_start+1, col_start+2, col_start+3,
-             col_start+4, col_start+5, col_start+6, col_start+7],
-            [date, b_in, b_out, b_in-b_out, date, a_in, a_out, abs(a_in-a_out)]
-        ):
-            c = ws.cell(row=row, column=col, value=val)
-            c.alignment = center
-            if isinstance(val, float) or (isinstance(val, int) and col != col_start and col != col_start+4):
-                c.number_format = '#,##0'
+        diff_dr = a_in  - b_in    # 借方差異
+        diff_cr = a_out - b_out   # 貸方差異
+        diff_tot = diff_dr - diff_cr  # 總差異
+
+        row_data = [
+            (date,          'YYYY/MM/DD', center, None),
+            (b_in,          num_fmt,      right,  None),
+            (b_out,         num_fmt,      right,  None),
+            (b_in - b_out,  num_fmt,      right,  None),
+            (date,          'YYYY/MM/DD', center, None),
+            (a_in,          num_fmt,      right,  None),
+            (a_out,         num_fmt,      right,  None),
+            (a_in - a_out,  num_fmt,      right,  None),
+            (date,          'YYYY/MM/DD', center, None),
+            (diff_dr,       num_fmt,      right,  None),
+            (diff_cr,       num_fmt,      right,  None),
+            (diff_tot,      num_fmt,      right,  None),
+        ]
+        for col_idx, (val, fmt, align, fill) in enumerate(row_data, start=1):
+            cell = ws2.cell(row=r, column=col_idx, value=val)
+            cell.number_format = fmt; cell.alignment = align
+            if fill:
+                cell.fill = fill
+
+    # 欄寬
+    for i, w in enumerate([13,16,16,16, 13,16,16,16, 13,16,16,16], start=1):
+        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws2.row_dimensions[1].height = 22
+    ws2.row_dimensions[2].height = 18
 
     wb.save(output_path)
     print(f'\n💾 Excel 報表已產出：{output_path}')
@@ -853,6 +885,13 @@ def cancel_acc_internal_reversals(inc_rem_a, exp_rem_a):
             for combo in itertools.combinations(pool.iterrows(), n):
                 rows = [c[1] for c in combo]
                 if sum(abs(r['業務金額']) for r in rows) != target: continue
+                # 1:1 描述相似度守衛：相似但不相同 → 可能是同類不同期（如退04月 vs 退05月），不對消
+                if n == 1:
+                    inc_desc = str(rows[0].get('描述.1', ''))
+                    exp_desc = str(e_row.get('描述.1', ''))
+                    if inc_desc and exp_desc and inc_desc != exp_desc:
+                        if difflib.SequenceMatcher(None, inc_desc, exp_desc).ratio() > 0.7:
+                            continue
                 combo_ids = [r['Acc_index'] for r in rows]
                 log.append({'inc_rows': rows, 'exp': e_row, 'amount': target, 'n': n})
                 paired_inc.extend(combo_ids)
@@ -873,43 +912,86 @@ PRE_REVERSAL_KEYWORDS = ['款項更正', '迴轉原傳票', '迴轉', '回轉', 
 
 def preprocess_acc_reversals(acc_in, acc_out):
     """
-    銀行配對開始前，先識別「負方描述含迴轉關鍵字且與正方金額完全相符」的對，
-    將兩者從配對池移除，避免原始分錄被銀行搶配後迴轉分錄成為孤立多入。
-    配對條件：正方描述必須被包含於迴轉描述中（不接受純金額唯一的退而求其次），
-    以確保確實是在沖銷哪一張原傳票，而非湊金額的誤配。
+    銀行配對開始前，先識別迴轉分錄對並移出配對池，避免原始分錄被銀行搶配。
+    支援兩種方向：
+      (A) 負方(C)含迴轉關鍵字：原始正方(D)描述被包含於迴轉描述中
+      (B) 正方(D)含迴轉關鍵字：原始負方(C)描述被包含於迴轉描述中
+    配對條件：原始描述必須被完整包含於迴轉描述中，不接受純金額唯一的退而求其次。
     """
     paired_inc, paired_exp = [], []
     log = []
 
-    reversal_entries = acc_out[acc_out['描述.1'].apply(
+    # (A) 負方(C)含迴轉關鍵字 → 找對應正方(D)
+    reversal_c = acc_out[acc_out['描述.1'].apply(
         lambda d: any(kw in str(d) for kw in PRE_REVERSAL_KEYWORDS)
     )]
-
-    for _, e_row in reversal_entries.iterrows():
+    for _, e_row in reversal_c.iterrows():
         if e_row['Acc_index'] in paired_exp: continue
         target = abs(e_row['業務金額'])
         if target == 0: continue
-
         pool = acc_in[~acc_in['Acc_index'].isin(paired_inc)]
         candidates = pool[pool['業務金額'].abs() == target]
         if candidates.empty: continue
-
-        # 必須找到「正方描述被包含於迴轉描述」的才配對，不做金額唯一的退而求其次
-        # 理由：迴轉傳票命名慣例通常含原傳票全文，若不符則視為不同事件
         e_desc = str(e_row.get('描述.1', ''))
         best = None
         for _, c_row in candidates.iterrows():
             c_desc = str(c_row.get('描述.1', ''))
-            if c_desc and len(c_desc) >= 4 and c_desc in e_desc:
+            if c_desc and len(c_desc) >= 2 and c_desc in e_desc:
                 best = c_row; break
-
         if best is not None:
             log.append({'inc': best, 'exp': e_row, 'amount': target})
             paired_inc.append(best['Acc_index'])
             paired_exp.append(e_row['Acc_index'])
-            print(f"  🔵 預處理對消：Acc:{best['Acc_index']}(+{target:,.0f}) ⇔ Acc:{e_row['Acc_index']}(-{target:,.0f})")
+            print(f"  🔵 預處理對消(C迴轉)：Acc:{best['Acc_index']}(+{target:,.0f}) ⇔ Acc:{e_row['Acc_index']}(-{target:,.0f})")
             print(f"       原始：{str(best.get('描述.1',''))[:50]}")
             print(f"       迴轉：{str(e_row.get('描述.1',''))[:50]}")
+
+    # (B) 正方(D)含迴轉關鍵字 → 找對應負方(C)（對稱邏輯）
+    reversal_d = acc_in[acc_in['描述.1'].apply(
+        lambda d: any(kw in str(d) for kw in PRE_REVERSAL_KEYWORDS)
+    )]
+    for _, e_row in reversal_d.iterrows():
+        if e_row['Acc_index'] in paired_inc: continue
+        target = abs(e_row['業務金額'])
+        if target == 0: continue
+        pool = acc_out[~acc_out['Acc_index'].isin(paired_exp)]
+        candidates = pool[pool['業務金額'].abs() == target]
+        if candidates.empty: continue
+        e_desc = str(e_row.get('描述.1', ''))
+        best = None
+        for _, c_row in candidates.iterrows():
+            c_desc = str(c_row.get('描述.1', ''))
+            if c_desc and len(c_desc) >= 2 and c_desc in e_desc:
+                best = c_row; break
+        if best is not None:
+            log.append({'inc': e_row, 'exp': best, 'amount': target})
+            paired_inc.append(e_row['Acc_index'])
+            paired_exp.append(best['Acc_index'])
+            print(f"  🔵 預處理對消(D迴轉)：Acc:{e_row['Acc_index']}(+{target:,.0f}) ⇔ Acc:{best['Acc_index']}(-{target:,.0f})")
+            print(f"       原始：{str(best.get('描述.1',''))[:50]}")
+            print(f"       迴轉：{str(e_row.get('描述.1',''))[:50]}")
+
+    # (C) 描述完全相同的 D/C 對（同日期、同金額、同描述）→ 內部對消，無銀行對應
+    # 條件：同日期防止跨期誤配；描述須 >= 4 字且完全相同防止空值碰撞
+    for _, d_row in acc_in[~acc_in['Acc_index'].isin(paired_inc)].iterrows():
+        d_desc = str(d_row.get('描述.1', ''))
+        d_date = d_row.get('業務日期_格式化', '')
+        if not d_desc or len(d_desc) < 4: continue
+        target = abs(d_row['業務金額'])
+        if target == 0: continue
+        pool = acc_out[
+            (~acc_out['Acc_index'].isin(paired_exp)) &
+            (acc_out['業務金額'].abs() == target) &
+            (acc_out['業務日期_格式化'] == d_date) &
+            (acc_out['描述.1'].astype(str) == d_desc)
+        ]
+        if pool.empty: continue
+        best = pool.iloc[0]
+        log.append({'inc': d_row, 'exp': best, 'amount': target})
+        paired_inc.append(d_row['Acc_index'])
+        paired_exp.append(best['Acc_index'])
+        print(f"  🔵 預處理對消(D/C同描述)：Acc:{d_row['Acc_index']}(+{target:,.0f}) ⇔ Acc:{best['Acc_index']}(-{target:,.0f})")
+        print(f"       描述：{d_desc[:60]}")
 
     clean_inc = acc_in[~acc_in['Acc_index'].isin(paired_inc)]
     clean_exp = acc_out[~acc_out['Acc_index'].isin(paired_exp)]
@@ -1055,8 +1137,8 @@ def build_html_report_with_soft_match(all_histories, all_rems, soft_matches, dat
     html = f"<div class='container'><h1>收支核銷報告 ({date})</h1>"
 
     html += "<div class='summary-box'>"
-    html += f"<div class='stat-card' style='border-top: 4px solid #22c55e;'><h3>🟢 總結成功核銷</h3><div style='font-size:32px; font-weight:bold; color:#22c55e;'>{total_matched} 筆</div></div>"
-    html += f"<div class='stat-card' style='border-top: 4px solid #eab308;'><h3>🟡 全部待確認</h3><div style='font-size:32px; font-weight:bold; color:#eab308;'>{total_pending_all} 筆</div></div>"
+    html += f"<div class='stat-card' style='border-top: 4px solid #22c55e;'><h3>🟢 總結成功核銷</h3><div style='font-size:32px; font-weight:bold; color:#22c55e;'>{total_matched} 組</div></div>"
+    html += f"<div class='stat-card' style='border-top: 4px solid #eab308;'><h3>🟡 全部待確認</h3><div style='font-size:32px; font-weight:bold; color:#eab308;'>{total_pending_all} 組</div></div>"
     html += f"<div class='stat-card' style='border-top: 4px solid #ef4444;'><h3>🔴 總計剩餘未入帳 (銀行端)</h3><div style='font-size:32px; font-weight:bold; color:#ef4444;'>{total_hard_rem} 筆</div></div>"
     html += "</div>"
 
@@ -1213,7 +1295,8 @@ def run_month_pipeline(month_code):
     print(f"   ▶ 銀行合計 {_total_bank} 筆（另有日內沖銷 {len(reversal_log)} 組 = {len(reversal_log)*2} 筆已移除）")
     print(f"   ▶ 會計合計 {_total_acc} 筆（正方 {len(acc_in)} 筆 + 負方 {len(acc_out)} 筆）")
 
-    # 保存原始筆數供稽核用（預處理後 acc_in/acc_out 可能減少）
+    # 保存原始資料快照：彙總表用原始數字，對帳用預處理後的數字
+    acc_in_raw, acc_out_raw = acc_in.copy(), acc_out.copy()
     _acc_in_orig_count  = len(acc_in)
     _acc_out_orig_count = len(acc_out)
 
@@ -1293,7 +1376,7 @@ def run_month_pipeline(month_code):
     build_excel_report(
         bank_path, inc_rem_b, exp_rem_b,
         all_soft_matches, output_xlsx,
-        bank_in, bank_out, acc_in, acc_out,
+        bank_in, bank_out, acc_in_raw, acc_out_raw,
         pending_combos=all_pending_combos
     )
 
@@ -1365,7 +1448,7 @@ for month_code in sorted(bank_files.keys()):
     run_month_pipeline(month_code)
 
 print(f'\n{"="*50}')
-print(f'📊 LLM Token 使用統計 (gpt-4o-mini)')
+print(f'📊 LLM Token 使用統計 ({_GEMINI_MODEL})')
 print(f'   呼叫次數  : {_token_usage["calls"]:>8,} 次')
 print(f'   Input  tokens: {_token_usage["input"]:>8,}')
 print(f'   Output tokens: {_token_usage["output"]:>8,}')

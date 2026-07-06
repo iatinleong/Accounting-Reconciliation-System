@@ -133,8 +133,11 @@ def update_handler_history() -> dict:
 
     new_count = 0
 
-    # ── 掃描帳務查詢-*.xlsx ───────────────────────
-    acc_files = sorted(glob.glob(os.path.join(DATA_DIR, '帳務查詢*.xlsx')))
+    # ── 掃描帳務查詢-*.xlsx / *.xlsm ─────────────
+    acc_files = sorted(
+        glob.glob(os.path.join(DATA_DIR, '帳務查詢*.xlsx')) +
+        glob.glob(os.path.join(DATA_DIR, '帳務查詢*.xlsm'))
+    )
     acc_files = [f for f in acc_files if not os.path.basename(f).startswith('~$')]
     print(f"  掃描帳務查詢：{len(acc_files)} 個檔案")
 

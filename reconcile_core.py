@@ -804,47 +804,79 @@ def build_excel_report(bank_path, inc_rem_b, exp_rem_b, soft_matches, output_pat
     ws.column_dimensions[openpyxl.utils.get_column_letter(insert_col)].width = 10
     ws.column_dimensions[openpyxl.utils.get_column_letter(insert_col + 1)].width = 10
 
-    # 按日期彙總
-    summary_row = ws.max_row + 2
-    bold = Font(bold=True)
-    header_fill = PatternFill("solid", fgColor="D9E1F2")
-    center_align = Alignment(horizontal="center")
+    # ── 每日變動數確認 sheet ──
+    if "每日變動數確認" in wb.sheetnames:
+        del wb["每日變動數確認"]
+    ws2 = wb.create_sheet("每日變動數確認")
+
     bank_df = pd.concat([bank_in, bank_out])
-    acc_df = pd.concat([acc_in, acc_out])
+    acc_df  = pd.concat([acc_in,  acc_out])
     bank_df["_date"] = pd.to_datetime(bank_df["交易日期"], errors="coerce").dt.strftime("%Y/%m/%d")
-    acc_df["_date"] = acc_df["業務日期_格式化"] if "業務日期_格式化" in acc_df.columns else pd.to_datetime(acc_df["業務日期"], errors="coerce").dt.strftime("%Y/%m/%d")
+    acc_df["_date"]  = acc_df["業務日期_格式化"] if "業務日期_格式化" in acc_df.columns else pd.to_datetime(acc_df["業務日期"], errors="coerce").dt.strftime("%Y/%m/%d")
     all_dates = sorted(set(bank_df["_date"].dropna()) | set(acc_df["_date"].dropna()))
-    col_start = 1
-    c = ws.cell(row=summary_row, column=col_start, value="銀行對賬單")
-    c.font = Font(bold=True, size=12)
-    c.fill = header_fill
-    c = ws.cell(row=summary_row, column=col_start + 4, value="會計賬務")
-    c.font = Font(bold=True, size=12)
-    c.fill = PatternFill("solid", fgColor="E2EFDA")
-    for i, h in enumerate(["交易日期", "銀行收入", "銀行支出", "銀行變動數"]):
-        c = ws.cell(row=summary_row + 1, column=col_start + i, value=h)
-        c.font = bold
-        c.fill = header_fill
-        c.alignment = center_align
-    for i, h in enumerate(["交易日期", "會計收入", "會計支出", "會計變動數"]):
-        c = ws.cell(row=summary_row + 1, column=col_start + 4 + i, value=h)
-        c.font = bold
-        c.fill = PatternFill("solid", fgColor="E2EFDA")
-        c.alignment = center_align
-    for r, date in enumerate(all_dates):
-        row = summary_row + 2 + r
-        b_in = bank_df[(bank_df["_date"] == date) & (bank_df["存入金額"] > 0)]["存入金額"].sum() if "存入金額" in bank_df else 0
-        b_out = bank_df[(bank_df["_date"] == date) & (bank_df["支出金額"] > 0)]["支出金額"].sum() if "支出金額" in bank_df else 0
-        a_in = acc_df[(acc_df["_date"] == date) & (acc_df["業務金額"] > 0)]["業務金額"].sum()
-        a_out = abs(acc_df[(acc_df["_date"] == date) & (acc_df["業務金額"] < 0)]["業務金額"].sum())
-        for col, val in zip(
-            [col_start, col_start + 1, col_start + 2, col_start + 3, col_start + 4, col_start + 5, col_start + 6, col_start + 7],
-            [date, b_in, b_out, b_in - b_out, date, a_in, a_out, abs(a_in - a_out)],
-        ):
-            c = ws.cell(row=row, column=col, value=val)
-            c.alignment = center_align
-            if isinstance(val, (float, int)) and col not in (col_start, col_start + 4):
-                c.number_format = "#,##0"
+
+    bank_fill = PatternFill("solid", fgColor="D9E1F2")
+    acc_fill  = PatternFill("solid", fgColor="E2EFDA")
+    chk_fill  = PatternFill("solid", fgColor="FFF2CC")
+    bold      = Font(bold=True)
+    center    = Alignment(horizontal="center", vertical="center")
+    right     = Alignment(horizontal="right",  vertical="center")
+    num_fmt   = '#,##0;-#,##0;"-"'
+
+    # Row 1：section headers（合併儲存格）
+    for c_start, c_end, title, fill in [
+        (1, 4,  "銀行對帳單", bank_fill),
+        (5, 8,  "會計帳務",   acc_fill),
+        (9, 12, "檢核",       chk_fill),
+    ]:
+        cell = ws2.cell(row=1, column=c_start, value=title)
+        cell.font = Font(bold=True, size=12); cell.fill = fill; cell.alignment = center
+        ws2.merge_cells(start_row=1, start_column=c_start, end_row=1, end_column=c_end)
+
+    # Row 2：欄位標題
+    col_headers = ["交易日期", "銀行收入", "銀行支出", "淨變動",
+                   "交易日期", "借方",     "貸方",     "淨變動",
+                   "交易日期", "借方差異", "貸方差異", "總差異"]
+    col_fills   = [bank_fill]*4 + [acc_fill]*4 + [chk_fill]*4
+    for i, (h, f) in enumerate(zip(col_headers, col_fills)):
+        cell = ws2.cell(row=2, column=i+1, value=h)
+        cell.font = bold; cell.fill = f; cell.alignment = center
+
+    # 資料列
+    for r, date in enumerate(all_dates, start=3):
+        b_in  = bank_df[(bank_df["_date"]==date) & (bank_df["存入金額"]>0)]["存入金額"].sum() if "存入金額" in bank_df.columns else 0
+        b_out = bank_df[(bank_df["_date"]==date) & (bank_df["支出金額"]>0)]["支出金額"].sum() if "支出金額" in bank_df.columns else 0
+        a_in  = acc_df[(acc_df["_date"]==date) & (acc_df["業務金額"]>0)]["業務金額"].sum()
+        a_out = abs(acc_df[(acc_df["_date"]==date) & (acc_df["業務金額"]<0)]["業務金額"].sum())
+        diff_dr  = a_in  - b_in
+        diff_cr  = a_out - b_out
+        diff_tot = diff_dr - diff_cr
+
+        row_data = [
+            (date,          "YYYY/MM/DD", center, None),
+            (b_in,          num_fmt,      right,  None),
+            (b_out,         num_fmt,      right,  None),
+            (b_in - b_out,  num_fmt,      right,  None),
+            (date,          "YYYY/MM/DD", center, None),
+            (a_in,          num_fmt,      right,  None),
+            (a_out,         num_fmt,      right,  None),
+            (a_in - a_out,  num_fmt,      right,  None),
+            (date,          "YYYY/MM/DD", center, None),
+            (diff_dr,       num_fmt,      right,  None),
+            (diff_cr,       num_fmt,      right,  None),
+            (diff_tot,      num_fmt,      right,  None),
+        ]
+        for col_idx, (val, fmt, align, fill) in enumerate(row_data, start=1):
+            cell = ws2.cell(row=r, column=col_idx, value=val)
+            cell.number_format = fmt; cell.alignment = align
+            if fill:
+                cell.fill = fill
+
+    # 欄寬
+    for i, w in enumerate([13,16,16,16, 13,16,16,16, 13,16,16,16], start=1):
+        ws2.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws2.row_dimensions[1].height = 22
+    ws2.row_dimensions[2].height = 18
 
     wb.save(output_path)
     print(f"\n💾 Excel 報表已產出：{output_path}")
@@ -1044,9 +1076,9 @@ def build_html_report(
 
     html = f"<div class='container'><h1>收支核銷報告 ({date})</h1>"
     html += "<div class='summary-box'>"
-    html += f"<div class='stat-card' style='border-top:4px solid #22c55e;'><h3>🟢 總結成功核銷</h3><div style='font-size:32px;font-weight:bold;color:#22c55e;'>{total_matched} 筆</div></div>"
-    html += f"<div class='stat-card' style='border-top:4px solid #eab308;'><h3>🟡 全部待確認</h3><div style='font-size:32px;font-weight:bold;color:#eab308;'>{total_pending_all} 筆</div></div>"
-    html += f"<div class='stat-card' style='border-top:4px solid #ef4444;'><h3>🔴 總計剩餘未入帳</h3><div style='font-size:32px;font-weight:bold;color:#ef4444;'>{total_hard_rem} 筆</div></div>"
+    html += f"<div class='stat-card' style='border-top:4px solid #22c55e;'><h3>🟢 總結成功核銷</h3><div style='font-size:32px;font-weight:bold;color:#22c55e;'>{total_matched} 組</div></div>"
+    html += f"<div class='stat-card' style='border-top:4px solid #eab308;'><h3>🟡 全部待確認</h3><div style='font-size:32px;font-weight:bold;color:#eab308;'>{total_pending_all} 組</div></div>"
+    html += f"<div class='stat-card' style='border-top:4px solid #ef4444;'><h3>🔴 總計剩餘未入帳 (銀行端)</h3><div style='font-size:32px;font-weight:bold;color:#ef4444;'>{total_hard_rem} 筆</div></div>"
     html += "</div>"
 
     if soft_matches or pending_combos:
@@ -1130,6 +1162,7 @@ def _run_month(month_code: str, bank_path: str, acc_sheets: dict, output_dir: st
     bank_in, bank_out, acc_in, acc_out, reversal_log = load_and_preprocess(target_date, bank_path, acc_sheets)
     print(f"✅ 數據載入：[收入組] 銀行 {len(bank_in)} 筆 / 會計 {len(acc_in)} 筆 | [支出組] 銀行 {len(bank_out)} 筆 / 會計 {len(acc_out)} 筆")
 
+    acc_in_raw, acc_out_raw = acc_in.copy(), acc_out.copy()
     _acc_in_orig = len(acc_in)
     _acc_out_orig = len(acc_out)
 
@@ -1190,7 +1223,7 @@ def _run_month(month_code: str, bank_path: str, acc_sheets: dict, output_dir: st
     all_soft = inc_soft + exp_soft
 
     output_xlsx = os.path.join(output_dir, f"未入帳清單_{month_code}.xlsx")
-    build_excel_report(bank_path, inc_rem_b, exp_rem_b, all_soft, output_xlsx, bank_in, bank_out, acc_in, acc_out, pending_combos=all_pending_combos)
+    build_excel_report(bank_path, inc_rem_b, exp_rem_b, all_soft, output_xlsx, bank_in, bank_out, acc_in_raw, acc_out_raw, pending_combos=all_pending_combos)
 
     inc_hist = [item for item in inc_hist if isinstance(item, dict)]
     exp_hist = [item for item in exp_hist if isinstance(item, dict)]
